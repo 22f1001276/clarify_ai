@@ -146,22 +146,42 @@ const App: React.FC = () => {
 
   const startCamera = async () => {
     setCameraError(null);
+    
+    // Check if getUserMedia is supported
+    if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+      setCameraError("Camera access is not supported in this browser. Please use the upload option.");
+      return;
+    }
+
     try {
-      // requesting camera permission explicitly
+      console.log("Requesting camera permission...");
+      
+      // Request camera permission explicitly with detailed constraints
       const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' }
+        video: { 
+          facingMode: 'environment',
+          width: { ideal: 1920 },
+          height: { ideal: 1080 }
+        },
+        audio: false
       });
+      
+      console.log("Camera permission granted");
       setCameraStream(stream);
     } catch (err: any) {
       console.error("Camera error:", err);
       let msg = "Could not access the camera.";
       
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-         msg = "Camera access denied. Please use the upload option or check your browser permissions.";
+         msg = "Camera access denied. Please allow camera access in your browser settings and try again.";
       } else if (err.name === 'NotFoundError') {
-         msg = "No camera found on this device.";
+         msg = "No camera found on this device. Please use the upload option.";
       } else if (err.name === 'NotReadableError') {
-         msg = "Your camera might be in use by another application.";
+         msg = "Your camera might be in use by another application. Please close other apps and try again.";
+      } else if (err.name === 'NotSupportedError' || err.name === 'TypeError') {
+         msg = "Camera access requires HTTPS or localhost. Please check your connection.";
+      } else {
+         msg = `Camera error: ${err.message || 'Unknown error'}`;
       }
       
       setCameraError(msg);
@@ -209,13 +229,41 @@ const App: React.FC = () => {
     // Cleanup of timers and state is handled in the onend callback
   };
 
-  const startListening = () => {
+  const startListening = async () => {
     setVoiceError(null);
+    
+    // Check if Speech Recognition is supported
     const SpeechRecognition = (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
       setVoiceError("Voice input is not supported in this browser. You can type instead.");
       return;
+    }
+
+    // Check if microphone is available before starting speech recognition
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      try {
+        // Request microphone permission explicitly first
+        console.log("Requesting microphone permission...");
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        
+        // Stop the stream immediately - we just needed to check permission
+        stream.getTracks().forEach(track => track.stop());
+        console.log("Microphone permission granted");
+      } catch (err: any) {
+        console.error("Microphone permission error:", err);
+        
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          setVoiceError("Microphone access denied. Please allow microphone access in your browser settings.");
+        } else if (err.name === 'NotFoundError') {
+          setVoiceError("No microphone found on this device.");
+        } else if (err.name === 'NotSupportedError' || err.name === 'TypeError') {
+          setVoiceError("Microphone access requires HTTPS or localhost.");
+        } else {
+          setVoiceError("Unable to access microphone. Please try again.");
+        }
+        return;
+      }
     }
 
     try {
@@ -246,6 +294,7 @@ const App: React.FC = () => {
       };
 
       recognition.onstart = () => {
+        console.log("Speech recognition started");
         setIsListening(true);
         resetSilenceTimer();
       };
@@ -266,7 +315,7 @@ const App: React.FC = () => {
       };
       
       recognition.onerror = (event: any) => {
-        console.error("Speech recognition error", event.error);
+        console.error("Speech recognition error:", event.error);
         
         // Ignore 'no-speech' errors as they just mean silence and browser stops
         if (event.error === 'no-speech') {
@@ -274,7 +323,13 @@ const App: React.FC = () => {
         }
 
         if (event.error === 'not-allowed' || event.error === 'permission-denied') {
-          setVoiceError("Microphone access blocked.");
+          setVoiceError("Microphone access blocked. Please allow microphone access in your browser settings.");
+          setIsListening(false);
+        } else if (event.error === 'audio-capture') {
+          setVoiceError("No microphone detected. Please check your microphone connection.");
+          setIsListening(false);
+        } else if (event.error === 'network') {
+          setVoiceError("Network error. Please check your internet connection.");
           setIsListening(false);
         } else {
           // For other errors, we might want to just stop silently or show a message
@@ -284,6 +339,7 @@ const App: React.FC = () => {
       };
       
       recognition.onend = () => {
+        console.log("Speech recognition ended");
         setIsListening(false);
         recognitionRef.current = null;
         if (silenceTimerRef.current) {
@@ -292,10 +348,11 @@ const App: React.FC = () => {
         }
       };
       
+      console.log("Starting speech recognition...");
       recognition.start();
-    } catch (err) {
-      console.error(err);
-      setVoiceError("Unable to start voice input.");
+    } catch (err: any) {
+      console.error("Speech recognition initialization error:", err);
+      setVoiceError("Unable to start voice input. Please try again.");
       setIsListening(false);
     }
   };
