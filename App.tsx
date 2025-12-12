@@ -4,7 +4,7 @@ import { AnalysisResultDisplay } from './components/AnalysisResult';
 import { analyzeDocument, sendChatMessage } from './services/geminiService';
 import { AppState, AnalysisResult, ChatMessage } from './types';
 import { SUPPORTED_LANGUAGES } from './constants';
-import { Loader2, RefreshCw, Send, Image as ImageIcon, MessageCircle, Mic, MicOff, Sun, Moon, X, Camera } from 'lucide-react';
+import { Loader2, RefreshCw, Send, Image as ImageIcon, MessageCircle, Mic, MicOff, Sun, Moon, X, Camera, AlertCircle } from 'lucide-react';
 
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>(AppState.IDLE);
@@ -25,9 +25,12 @@ const App: React.FC = () => {
   // Voice Input State
   const [isListening, setIsListening] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
+  const recognitionRef = useRef<any>(null);
+  const silenceTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   // Camera State
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
+  const [cameraError, setCameraError] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
 
   // Initialize Theme
@@ -85,6 +88,7 @@ const App: React.FC = () => {
     const objectUrl = URL.createObjectURL(file);
     setPreviewUrl(objectUrl);
     setErrorMsg(null);
+    setCameraError(null);
   };
 
   const handleStartOver = () => {
@@ -95,7 +99,9 @@ const App: React.FC = () => {
     setChatHistory([]);
     setErrorMsg(null);
     setVoiceError(null);
+    setCameraError(null);
     stopCamera();
+    stopListening();
   };
 
   const handleAnalyze = async () => {
@@ -139,6 +145,7 @@ const App: React.FC = () => {
   // --- Camera Logic ---
 
   const startCamera = async () => {
+    setCameraError(null);
     try {
       // requesting camera permission explicitly
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -150,12 +157,14 @@ const App: React.FC = () => {
       let msg = "Could not access the camera.";
       
       if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-         msg = "Please allow camera access in your browser pop-up to take a photo.";
+         msg = "Camera access denied. Please use the upload option or check your browser permissions.";
       } else if (err.name === 'NotFoundError') {
          msg = "No camera found on this device.";
+      } else if (err.name === 'NotReadableError') {
+         msg = "Your camera might be in use by another application.";
       }
       
-      alert(msg);
+      setCameraError(msg);
     }
   };
 
@@ -186,8 +195,19 @@ const App: React.FC = () => {
       }
     }
   };
+  
+  const handleCameraClick = () => {
+    startCamera();
+  };
 
   // --- Voice Logic ---
+
+  const stopListening = () => {
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
+    // Cleanup of timers and state is handled in the onend callback
+  };
 
   const startListening = () => {
     setVoiceError(null);
@@ -200,31 +220,78 @@ const App: React.FC = () => {
 
     try {
       const recognition = new SpeechRecognition();
+      recognitionRef.current = recognition;
+
       const langObj = SUPPORTED_LANGUAGES.find(l => l.label === selectedLanguage);
       const langCode = langObj ? langObj.code : 'en';
       recognition.lang = langCode === 'en' ? 'en-US' : langCode;
-      recognition.interimResults = false;
+      
+      // Enable continuous results so it doesn't stop after one sentence
+      recognition.continuous = true;
+      // Enable interim results for real-time typing effect
+      recognition.interimResults = true;
       recognition.maxAlternatives = 1;
 
-      recognition.onstart = () => setIsListening(true);
-      recognition.onresult = (event: any) => {
-        const transcript = event.results[0][0].transcript;
-        setChatInput(prev => {
-          const spacer = prev.length > 0 && !prev.endsWith(' ') ? ' ' : '';
-          return prev + spacer + transcript;
-        });
-        setIsListening(false);
+      // Capture the text currently in the input so we can append to it
+      const startText = chatInput;
+
+      // Silence Detection
+      const resetSilenceTimer = () => {
+        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+        silenceTimerRef.current = setTimeout(() => {
+          if (recognitionRef.current) {
+            recognitionRef.current.stop();
+          }
+        }, 3000); // Stop after 3 seconds of silence
       };
+
+      recognition.onstart = () => {
+        setIsListening(true);
+        resetSilenceTimer();
+      };
+      
+      recognition.onresult = (event: any) => {
+        resetSilenceTimer(); // Reset timer when speech is detected
+
+        let transcript = '';
+        // Combine results
+        for (let i = 0; i < event.results.length; i++) {
+          transcript += event.results[i][0].transcript;
+        }
+        
+        setChatInput(() => {
+          const spacer = startText.length > 0 && !startText.endsWith(' ') ? ' ' : '';
+          return startText + spacer + transcript;
+        });
+      };
+      
       recognition.onerror = (event: any) => {
         console.error("Speech recognition error", event.error);
-        setIsListening(false);
+        
+        // Ignore 'no-speech' errors as they just mean silence and browser stops
+        if (event.error === 'no-speech') {
+          return;
+        }
+
         if (event.error === 'not-allowed' || event.error === 'permission-denied') {
-          setVoiceError("Microphone blocked. Check address bar permissions.");
-        } else if (event.error !== 'no-speech') {
+          setVoiceError("Microphone access blocked.");
+          setIsListening(false);
+        } else {
+          // For other errors, we might want to just stop silently or show a message
+          setIsListening(false);
           setVoiceError("We couldn't hear you clearly. Please try again.");
         }
       };
-      recognition.onend = () => setIsListening(false);
+      
+      recognition.onend = () => {
+        setIsListening(false);
+        recognitionRef.current = null;
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+          silenceTimerRef.current = null;
+        }
+      };
+      
       recognition.start();
     } catch (err) {
       console.error(err);
@@ -234,13 +301,19 @@ const App: React.FC = () => {
   };
 
   const handleMicClick = () => {
-    if (isListening) return;
-    startListening();
+    if (isListening) {
+      stopListening();
+    } else {
+      startListening();
+    }
   };
 
   useEffect(() => {
     return () => {
       if (previewUrl) URL.revokeObjectURL(previewUrl);
+      // Clean up timer and recognition on unmount
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (recognitionRef.current) recognitionRef.current.stop();
     };
   }, [previewUrl]);
 
@@ -317,8 +390,15 @@ const App: React.FC = () => {
 
             <FileUpload 
               onFileSelect={handleFileSelect}
-              onCameraClick={startCamera}
+              onCameraClick={handleCameraClick}
             />
+            
+            {cameraError && (
+              <div className="bg-red-50 dark:bg-red-900/30 p-4 rounded-xl border border-red-200 dark:border-red-800 flex items-center gap-3 animate-in fade-in slide-in-from-top-2">
+                <AlertCircle className="w-6 h-6 text-red-600 dark:text-red-400 shrink-0" />
+                <p className="text-red-700 dark:text-red-200">{cameraError}</p>
+              </div>
+            )}
 
             {selectedFile && previewUrl && (
                <div className="mt-8 bg-white dark:bg-slate-800 p-6 rounded-3xl shadow-lg border border-slate-200 dark:border-slate-700 animate-in zoom-in duration-300 transition-colors duration-300">
@@ -389,7 +469,7 @@ const App: React.FC = () => {
             </div>
             <div>
               <h2 className="text-2xl font-bold text-slate-800 dark:text-white">Reading your document...</h2>
-              <p className="text-lg text-slate-500 dark:text-slate-400 mt-2">Just a moment while I put on my reading glasses.</p>
+              <p className="text-lg text-slate-500 dark:text-slate-400 mt-2">Just a moment while I review your document.</p>
             </div>
           </div>
         )}
@@ -449,13 +529,13 @@ const App: React.FC = () => {
                 <div className="flex gap-3">
                   <button
                     onClick={handleMicClick}
-                    disabled={isChatLoading || isListening}
+                    disabled={isChatLoading}
                     className={`p-4 rounded-full shadow-lg transition-all ${
                       isListening 
                         ? 'bg-red-500 text-white animate-pulse scale-105' 
                         : 'bg-slate-100 dark:bg-slate-700 text-slate-600 dark:text-slate-300 hover:bg-slate-200 dark:hover:bg-slate-600'
                     }`}
-                    title="Speak your question"
+                    title={isListening ? "Stop listening" : "Speak your question"}
                   >
                      {isListening ? <MicOff className="w-6 h-6" /> : <Mic className="w-6 h-6" />}
                   </button>
@@ -467,8 +547,9 @@ const App: React.FC = () => {
                       if (voiceError) setVoiceError(null); // Clear error on typing
                     }}
                     onKeyDown={(e) => e.key === 'Enter' && handleSendMessage()}
-                    placeholder="Ask a question..."
-                    className="flex-1 px-6 py-4 rounded-full border-2 border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-lg focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 dark:focus:ring-blue-900 transition-all placeholder:text-slate-400"
+                    disabled={isListening}
+                    placeholder={isListening ? "Listening..." : "Ask a question..."}
+                    className="flex-1 px-6 py-4 rounded-full border-2 border-slate-200 dark:border-slate-600 bg-white dark:bg-slate-900 text-slate-900 dark:text-white text-lg focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100 dark:focus:ring-blue-900 transition-all placeholder:text-slate-400 disabled:bg-slate-50 dark:disabled:bg-slate-800 disabled:text-slate-500"
                   />
                   <button
                     onClick={handleSendMessage}

@@ -1,6 +1,6 @@
 import { GoogleGenAI, Modality } from "@google/genai";
 import { AnalysisResult, AnalysisSchema, ChatMessage } from "../types";
-import { SYSTEM_INSTRUCTION } from "../constants";
+import { ANALYSIS_SYSTEM_INSTRUCTION, CHAT_SYSTEM_INSTRUCTION } from "../constants";
 
 // Initialize Gemini Client
 const ai = new GoogleGenAI({ apiKey: process.env.API_KEY });
@@ -94,7 +94,7 @@ export const analyzeDocument = async (
         ],
       },
       config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
+        systemInstruction: ANALYSIS_SYSTEM_INSTRUCTION,
         responseMimeType: "application/json",
         responseSchema: AnalysisSchema,
       },
@@ -179,7 +179,7 @@ export const sendChatMessage = async (
       model: "gemini-3-pro-preview",
       contents: { parts },
       config: {
-        systemInstruction: SYSTEM_INSTRUCTION,
+        systemInstruction: CHAT_SYSTEM_INSTRUCTION,
       },
     });
 
