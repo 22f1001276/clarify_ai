@@ -4,7 +4,7 @@ import { AnalysisResultDisplay } from './components/AnalysisResult';
 import { analyzeDocument, sendChatMessage } from './services/geminiService';
 import { AppState, AnalysisResult, ChatMessage } from './types';
 import { SUPPORTED_LANGUAGES } from './constants';
-import { Loader2, RefreshCw, Send, Image as ImageIcon, MessageCircle, Mic, MicOff, X, Check, Camera, Sun, Moon, Info } from 'lucide-react';
+import { Loader2, RefreshCw, Send, Image as ImageIcon, MessageCircle, Mic, MicOff, Sun, Moon, X, Camera } from 'lucide-react';
 
 const App: React.FC = () => {
   const [state, setState] = useState<AppState>(AppState.IDLE);
@@ -25,16 +25,10 @@ const App: React.FC = () => {
   // Voice Input State
   const [isListening, setIsListening] = useState(false);
   const [voiceError, setVoiceError] = useState<string | null>(null);
-  
+
   // Camera State
   const [cameraStream, setCameraStream] = useState<MediaStream | null>(null);
   const videoRef = useRef<HTMLVideoElement>(null);
-
-  // Permission Logic State
-  const [permissionModal, setPermissionModal] = useState<{
-    type: 'camera' | 'mic';
-    resolve: (granted: boolean) => void;
-  } | null>(null);
 
   // Initialize Theme
   useEffect(() => {
@@ -142,55 +136,58 @@ const App: React.FC = () => {
     }
   };
 
-  // --- Permission Handling Logic ---
+  // --- Camera Logic ---
 
-  const requestPermission = async (type: 'camera' | 'mic'): Promise<boolean> => {
-    // 1. Check App LocalStorage preference
-    // We removed the browser permission check so the modal always shows if not allowed in app.
-    const key = type === 'camera' ? 'clarify_camera_perm' : 'clarify_mic_perm';
-    const savedPref = localStorage.getItem(key);
-
-    if (savedPref === 'allowed') {
-      return Promise.resolve(true);
+  const startCamera = async () => {
+    try {
+      // requesting camera permission explicitly
+      const stream = await navigator.mediaDevices.getUserMedia({
+        video: { facingMode: 'environment' }
+      });
+      setCameraStream(stream);
+    } catch (err: any) {
+      console.error("Camera error:", err);
+      let msg = "Could not access the camera.";
+      
+      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+         msg = "Please allow camera access in your browser pop-up to take a photo.";
+      } else if (err.name === 'NotFoundError') {
+         msg = "No camera found on this device.";
+      }
+      
+      alert(msg);
     }
-
-    // 2. Show our custom explaining modal
-    return new Promise((resolve) => {
-      setPermissionModal({ type, resolve });
-    });
   };
 
-  const handlePermissionResult = (choice: 'once' | 'while_visiting' | 'deny') => {
-    if (!permissionModal) return;
-
-    const { type, resolve } = permissionModal;
-    setPermissionModal(null);
-
-    if (choice === 'deny') {
-      resolve(false);
-      return;
+  const stopCamera = () => {
+    if (cameraStream) {
+      cameraStream.getTracks().forEach(track => track.stop());
+      setCameraStream(null);
     }
+  };
 
-    if (choice === 'while_visiting') {
-      const key = type === 'camera' ? 'clarify_camera_perm' : 'clarify_mic_perm';
-      localStorage.setItem(key, 'allowed');
+  const capturePhoto = () => {
+    if (videoRef.current && cameraStream) {
+      const video = videoRef.current;
+      const canvas = document.createElement('canvas');
+      // Set canvas size to match video dimensions
+      canvas.width = video.videoWidth;
+      canvas.height = video.videoHeight;
+      const ctx = canvas.getContext('2d');
+      if (ctx) {
+        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+        canvas.toBlob((blob) => {
+          if (blob) {
+            const file = new File([blob], "captured_document.jpg", { type: "image/jpeg" });
+            handleFileSelect(file);
+            stopCamera();
+          }
+        }, 'image/jpeg', 0.95);
+      }
     }
-
-    // For 'once', we just resolve true but don't save to localStorage.
-    // The browser will then show its native prompt if not already granted.
-    resolve(true);
   };
 
   // --- Voice Logic ---
-
-  const handleMicClick = async () => {
-    if (isListening) return;
-    
-    const granted = await requestPermission('mic');
-    if (granted) {
-      startListening();
-    }
-  };
 
   const startListening = () => {
     setVoiceError(null);
@@ -222,7 +219,7 @@ const App: React.FC = () => {
         console.error("Speech recognition error", event.error);
         setIsListening(false);
         if (event.error === 'not-allowed' || event.error === 'permission-denied') {
-          setVoiceError("Microphone blocked. Please check browser permissions.");
+          setVoiceError("Microphone blocked. Check address bar permissions.");
         } else if (event.error !== 'no-speech') {
           setVoiceError("We couldn't hear you clearly. Please try again.");
         }
@@ -236,60 +233,9 @@ const App: React.FC = () => {
     }
   };
 
-  // --- Camera Logic ---
-
-  const handleCameraClick = async () => {
-    const granted = await requestPermission('camera');
-    if (granted) {
-      startCamera();
-    }
-  };
-
-  const startCamera = async () => {
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({
-        video: { facingMode: 'environment' }
-      });
-      setCameraStream(stream);
-    } catch (err: any) {
-      console.error("Camera error:", err);
-      let msg = "Could not access the camera.";
-      
-      if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-         msg = "Camera access was denied by your browser. Please check the lock icon in your address bar.";
-      } else if (err.name === 'NotFoundError') {
-         msg = "No camera found on this device.";
-      }
-      
-      alert(`${msg}\n\nIf you are on a restricted device, please try uploading a photo instead.`);
-    }
-  };
-
-  const stopCamera = () => {
-    if (cameraStream) {
-      cameraStream.getTracks().forEach(track => track.stop());
-      setCameraStream(null);
-    }
-  };
-
-  const capturePhoto = () => {
-    if (videoRef.current && cameraStream) {
-      const video = videoRef.current;
-      const canvas = document.createElement('canvas');
-      canvas.width = video.videoWidth;
-      canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d');
-      if (ctx) {
-        ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-        canvas.toBlob((blob) => {
-          if (blob) {
-            const file = new File([blob], "captured_document.jpg", { type: "image/jpeg" });
-            handleFileSelect(file);
-            stopCamera();
-          }
-        }, 'image/jpeg', 0.9);
-      }
-    }
+  const handleMicClick = () => {
+    if (isListening) return;
+    startListening();
   };
 
   useEffect(() => {
@@ -370,8 +316,8 @@ const App: React.FC = () => {
             </div>
 
             <FileUpload 
-              onFileSelect={handleFileSelect} 
-              onCameraTap={handleCameraClick}
+              onFileSelect={handleFileSelect}
+              onCameraClick={startCamera}
             />
 
             {selectedFile && previewUrl && (
@@ -392,6 +338,43 @@ const App: React.FC = () => {
                  </div>
                </div>
             )}
+          </div>
+        )}
+
+        {/* Camera Overlay */}
+        {cameraStream && (
+          <div className="fixed inset-0 z-50 bg-black flex flex-col animate-in fade-in">
+            <div className="relative flex-1 bg-black overflow-hidden flex items-center justify-center">
+               <video 
+                ref={(node) => {
+                  if (node && cameraStream && node.srcObject !== cameraStream) {
+                    node.srcObject = cameraStream;
+                    videoRef.current = node;
+                    node.play().catch(console.error);
+                  }
+                }}
+                autoPlay 
+                playsInline 
+                className="w-full h-full object-cover"
+               />
+               <div className="absolute top-0 left-0 right-0 p-6 flex justify-end bg-gradient-to-b from-black/50 to-transparent">
+                  <button 
+                    onClick={stopCamera}
+                    className="text-white bg-white/20 backdrop-blur-md p-3 rounded-full hover:bg-white/30 transition-colors"
+                  >
+                    <X className="w-8 h-8" />
+                  </button>
+               </div>
+            </div>
+            <div className="bg-slate-900 p-8 flex justify-center items-center pb-12">
+               <button 
+                onClick={capturePhoto}
+                className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center bg-white/10 active:bg-white/30 transition-all active:scale-95 hover:bg-white/20"
+                aria-label="Capture Photo"
+               >
+                 <div className="w-16 h-16 bg-white rounded-full pointer-events-none"></div>
+               </button>
+            </div>
           </div>
         )}
 
@@ -504,92 +487,6 @@ const App: React.FC = () => {
             </section>
           </div>
         )}
-
-        {/* Permission Popup Modal */}
-        {permissionModal && (
-          <div className="fixed inset-0 z-50 bg-black/40 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
-             <div className="bg-white dark:bg-slate-800 w-full max-w-sm p-6 rounded-3xl shadow-2xl border border-slate-200 dark:border-slate-700 animate-in zoom-in-95">
-              <div className="flex justify-between items-start mb-4">
-                <h3 className="font-bold text-slate-800 dark:text-white text-xl">
-                  {permissionModal.type === 'mic' ? 'Enable Voice?' : 'Enable Camera?'}
-                </h3>
-                <button 
-                  onClick={() => handlePermissionResult('deny')} 
-                  className="text-slate-400 hover:text-slate-600 dark:text-slate-500 dark:hover:text-slate-300 bg-slate-100 dark:bg-slate-700 p-2 rounded-full transition-colors"
-                >
-                  <X className="w-5 h-5" />
-                </button>
-              </div>
-              <p className="text-slate-600 dark:text-slate-300 text-base mb-6 leading-relaxed">
-                {permissionModal.type === 'mic' 
-                  ? 'We need access to your microphone so you can ask questions by speaking.'
-                  : 'We need access to your camera so you can take a photo of your document.'
-                }
-              </p>
-              
-              <div className="flex flex-col gap-3">
-                <button 
-                  onClick={() => handlePermissionResult('while_visiting')}
-                  className="w-full py-3.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl font-bold text-base flex items-center justify-center gap-2 transition-colors shadow-md"
-                >
-                  <Check className="w-5 h-5" /> While visiting this website
-                </button>
-                <button 
-                  onClick={() => handlePermissionResult('once')}
-                  className="w-full py-3.5 bg-slate-100 hover:bg-slate-200 dark:bg-slate-700 dark:hover:bg-slate-600 text-slate-800 dark:text-slate-200 rounded-xl font-bold text-base transition-colors"
-                >
-                  Only this time
-                </button>
-                <button 
-                  onClick={() => handlePermissionResult('deny')}
-                  className="w-full py-2 text-slate-500 dark:text-slate-400 hover:text-slate-700 dark:hover:text-slate-200 text-base font-medium transition-colors"
-                >
-                  Deny
-                </button>
-              </div>
-              <div className="mt-4 pt-4 border-t border-slate-100 dark:border-slate-700 flex items-center gap-2 text-xs text-slate-400 dark:text-slate-500">
-                <Info className="w-4 h-4" />
-                <span>You might still need to confirm in your browser.</span>
-              </div>
-            </div>
-          </div>
-        )}
-
-        {/* Camera Overlay */}
-        {cameraStream && (
-          <div className="fixed inset-0 z-50 bg-black flex flex-col animate-in fade-in">
-            <div className="relative flex-1 bg-black overflow-hidden">
-               <video 
-                ref={(node) => {
-                  if (node && cameraStream && node.srcObject !== cameraStream) {
-                    node.srcObject = cameraStream;
-                    videoRef.current = node;
-                  }
-                }}
-                autoPlay 
-                playsInline 
-                className="absolute inset-0 w-full h-full object-cover"
-               />
-               <div className="absolute top-0 left-0 right-0 p-4 bg-gradient-to-b from-black/60 to-transparent">
-                  <button 
-                    onClick={stopCamera}
-                    className="text-white p-2 bg-white/20 backdrop-blur-md rounded-full"
-                  >
-                    <X className="w-6 h-6" />
-                  </button>
-               </div>
-            </div>
-            <div className="bg-slate-900 p-8 flex justify-center items-center pb-12">
-               <button 
-                onClick={capturePhoto}
-                className="w-20 h-20 rounded-full border-4 border-white flex items-center justify-center bg-white/10 active:bg-white/30 transition-all active:scale-95"
-               >
-                 <div className="w-16 h-16 bg-white rounded-full"></div>
-               </button>
-            </div>
-          </div>
-        )}
-
       </main>
     </div>
   );
