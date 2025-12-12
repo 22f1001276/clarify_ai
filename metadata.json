@@ -1,8 +1,5 @@
 {
   "name": "Clarify AI",
   "description": "An empathetic document helper for elderly users that simplifies complex legal and medical paperwork.",
-  "requestFramePermissions": [
-    "camera",
-    "microphone"
-  ]
+  "requestFramePermissions": []
 }
